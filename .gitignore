@@ -1,0 +1,59 @@
+# -------------------------
+# Python
+# -------------------------
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# -------------------------
+# Environments
+# -------------------------
+.venv/
+venv/
+env/*
+!env/environment.yml
+!env/requirements.txt
+
+# -------------------------
+# Data & Experiments (symlink targets)
+# -------------------------
+data
+exp
+model
+
+# -------------------------
+# Model outputs & large files
+# -------------------------
+*.pt
+*.pth
+*.ckpt
+*.onnx
+*.engine
+
+runs/
+logs/
+output/
+checkpoints/
+
+# -------------------------
+# Cache & temp
+# -------------------------
+.cache/
+*.cache
+cache/
+*.tmp
+*.temp
+
+# -------------------------
+# IDE / OS specific
+# -------------------------
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# -------------------------
+# Jupyter
+# -------------------------
+.ipynb_checkpoints/
