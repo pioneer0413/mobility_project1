@@ -15,8 +15,8 @@ if [ -f env/environment.yml ]; then
     conda env update -f env/environment.yml
 elif [ -f env/requirements.txt ]; then
     echo "Setting up Python virtual environment..."
-    python3 -m venv .venv
-    source .venv/bin/activate
+    python3 -m venv .venv --system-site-packages
+    #source .venv/bin/activate
     pip install -r env/requirements.txt
 fi
 
