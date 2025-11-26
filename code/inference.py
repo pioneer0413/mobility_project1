@@ -3,6 +3,7 @@ import os
 import argparse 
 from datetime import datetime
 import json
+import csv
 import cv2
 import numpy as np
 # 모델
@@ -40,7 +41,7 @@ if __name__ == "__main__":
     parser.add_argument('--mode', type=str, default='predict', choices=['build', 'predict'], 
                         help='Execution mode: build engine or predict')
     # 모델 경로
-    parser.add_argument('--model_path', type=str, default='/home/itec/mobility_project1/model/enric_yolo11m_20251124_105625/weights/best.pt', 
+    parser.add_argument('--model_path', type=str, default='/home/itec/mobility_project1/model/enric_yolo11l_20251124_150213/weights/best.pt', 
                         help='Path to the original YOLO model')
     # 파라미터 설정 파일 경로 configuration file path
     parser.add_argument('--config_path', type=str, default=None, 
@@ -57,6 +58,9 @@ if __name__ == "__main__":
     # 실행 모드 ['single', 'iterative']
     parser.add_argument('--run_mode', type=str, default='iterative', choices=['single', 'iterative'], 
                         help='Run mode: single or iterative inference')
+    # CSV 저장 경로
+    parser.add_argument('--csv_path', type=str, default='exp/speed.csv',
+                        help='Path to save inference statistics CSV file')
     args = parser.parse_args()
 
     current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -107,6 +111,49 @@ if __name__ == "__main__":
         if args.suffix is not None:
             save_dir_name += f"_{args.suffix}"
         save_dir = os.path.join(save_root_dir, save_dir_name)
+
+        # 통계 저장용 변수 초기화
+        # 성능 관련 통계는 나중에 추가 (앞쪽에 배치하기 위해)
+        stats = {}
+        
+        # config에서 실제로 사용된 값들을 stats에 추가 (default 값 포함)
+        # 각 predict 호출에서 실제로 사용되는 파라미터들
+        inference_params = {
+            'device': config.get('device', 0),
+            'half': config.get('half', True),
+            'imgsz': config.get('imgsz', 1280),
+            'conf': config.get('conf', 0.25),
+            'iou': config.get('iou', 0.7),
+            'max_det': config.get('max_det', 300),
+            'batch': config.get('batch', 1),
+            'stream': config.get('stream', False),
+            'verbose': config.get('verbose', False),
+            'augment': config.get('augment', False),
+            'agnostic_nms': config.get('agnostic_nms', False),
+            'save_txt': config.get('save_txt', False),
+            'save_conf': config.get('save_conf', False),
+            'save_crop': config.get('save_crop', False),
+            'exist_ok': config.get('exist_ok', True),
+            'show_video': config.get('show_video', False),
+            'save_video': config.get('save_video', False),
+            'video_fps': config.get('video_fps', 10),
+        }
+        
+        # classes는 None일 수 있으므로 별도 처리
+        classes = config.get('classes', None)
+        if classes is not None:
+            inference_params['classes'] = str(classes)  # 리스트를 문자열로 변환
+        
+        # 메타 정보 (config 뒤에 배치)
+        meta_info = {
+            'timestamp': current_time,
+            'user': args.user,
+            'model_name': model_name,
+            'model_path': args.model_path,
+            'data_path': args.data_path,
+            'run_mode': args.run_mode,
+            'is_video': is_video,
+        }
 
         # 실행 모드에 따라 분기
         if args.run_mode == 'single':
@@ -228,14 +275,29 @@ if __name__ == "__main__":
                     print(f"[INFO] Video saved to {video_path}")
                 
                 # 통계 출력
-                avg_inference = (total_preprocess + total_inference + total_postprocess) / frame_count if frame_count > 0 else 0
+                avg_preprocess = total_preprocess / frame_count if frame_count > 0 else 0
+                avg_inference = total_inference / frame_count if frame_count > 0 else 0
+                avg_postprocess = total_postprocess / frame_count if frame_count > 0 else 0
+                avg_total = avg_preprocess + avg_inference + avg_postprocess
+                fps = 1000 / avg_total if avg_total > 0 else 0
+                
                 print(f"\n[INFO] Single-frame Inference Statistics:")
                 print(f"  Total frames: {frame_count}")
-                print(f"  Average preprocess: {total_preprocess/frame_count:.2f} ms")
-                print(f"  Average inference: {total_inference/frame_count:.2f} ms")
-                print(f"  Average postprocess: {total_postprocess/frame_count:.2f} ms")
-                print(f"  Average total per frame: {avg_inference:.2f} ms")
-                print(f"  Average FPS: {1000/avg_inference:.2f}")
+                print(f"  Average preprocess: {avg_preprocess:.2f} ms")
+                print(f"  Average inference: {avg_inference:.2f} ms")
+                print(f"  Average postprocess: {avg_postprocess:.2f} ms")
+                print(f"  Average total per frame: {avg_total:.2f} ms")
+                print(f"  Average FPS: {fps:.2f}")
+                
+                # 통계 저장
+                # 순서: 성능 관련 -> config 파라미터 -> 메타 정보
+                stats['total_frames'] = frame_count
+                stats['avg_preprocess'] = avg_preprocess
+                stats['avg_inference'] = avg_inference
+                stats['avg_postprocess'] = avg_postprocess
+                stats['fps'] = fps
+                stats.update(inference_params)
+                stats.update(meta_info)
                 
             else:
                 # 이미지 디렉터리인 경우 첫 번째 이미지만 처리
@@ -249,7 +311,7 @@ if __name__ == "__main__":
                 
                 results = model.predict(
                     source=image_path,
-                    save_txt=config.get('save_txt', True),
+                    save_txt=config.get('save_txt', False),
                     project=save_root_dir,
                     name=save_dir_name,
                     exist_ok=config.get('exist_ok', True),
@@ -260,6 +322,9 @@ if __name__ == "__main__":
                 result = results[0]
                 
                 print(f"[INFO] Inference completed on single image. Results saved to {save_dir}")
+                
+                # 단일 이미지는 통계 저장 안 함 (필요 시 추가 가능)
+                stats = None
             
         elif args.run_mode == 'iterative':
             print("[INFO] Iterative inference mode selected - Batch processing then visualization.")
@@ -268,7 +333,7 @@ if __name__ == "__main__":
             use_stream = config.get('stream', False)
             
             # 시각화 옵션 추가
-            show_video = config.get('show_video', True)  # 실시간 영상 표시 여부
+            show_video = config.get('show_video', False)  # 실시간 영상 표시 여부
             save_video = config.get('save_video', False)  # 영상 파일 저장 여부
             
             # 비디오 라이터 초기화 (저장 옵션이 켜져있을 경우)
@@ -305,7 +370,7 @@ if __name__ == "__main__":
                 imgsz=config.get('imgsz', 640),
                 
                 # 성능 최적화
-                batch=config.get('batch', 32) if not is_video else 1,  # 비디오는 배치 1
+                batch=config.get('batch', 1) if not is_video else 1,  # 비디오는 배치 1
                 stream=use_stream,
                 verbose=config.get('verbose', False),
                 
@@ -322,7 +387,7 @@ if __name__ == "__main__":
                 agnostic_nms=config.get('agnostic_nms', False),
                 
                 # 저장 옵션
-                save_txt=config.get('save_txt', True),
+                save_txt=config.get('save_txt', False),
                 save_conf=config.get('save_conf', False),
                 save_crop=config.get('save_crop', False),
                 
@@ -398,14 +463,51 @@ if __name__ == "__main__":
                 print(f"[INFO] Video saved to {video_path}")
             
             total_time = total_preprocess + total_inference + total_postprocess
-            avg_inference = total_time / num_images if num_images > 0 else 0
+            avg_preprocess = total_preprocess / num_images if num_images > 0 else 0
+            avg_inference = total_inference / num_images if num_images > 0 else 0
+            avg_postprocess = total_postprocess / num_images if num_images > 0 else 0
+            avg_total = total_time / num_images if num_images > 0 else 0
+            fps = 1000 / avg_total if avg_total > 0 else 0
 
             print(f"\n[INFO] Inference Statistics:")
             print(f"  Total {'frames' if is_video else 'images'}: {num_images}")
-            print(f"  Average preprocess: {total_preprocess/num_images:.2f} ms")
-            print(f"  Average inference: {total_inference/num_images:.2f} ms")
-            print(f"  Average postprocess: {total_postprocess/num_images:.2f} ms")
-            print(f"  Average total per {'frame' if is_video else 'image'}: {avg_inference:.2f} ms")
-            print(f"  FPS: {1000/avg_inference:.2f}")
+            print(f"  Average preprocess: {avg_preprocess:.2f} ms")
+            print(f"  Average inference: {avg_inference:.2f} ms")
+            print(f"  Average postprocess: {avg_postprocess:.2f} ms")
+            print(f"  Average total per {'frame' if is_video else 'image'}: {avg_total:.2f} ms")
+            print(f"  FPS: {fps:.2f}")
 
             print(f"[INFO] Inference completed. Results saved to {save_dir}")
+            
+            # 통계 저장
+            # 순서: 성능 관련 -> config 파라미터 -> 메타 정보
+            stats['total_items'] = num_images
+            stats['avg_preprocess'] = avg_preprocess
+            stats['avg_inference'] = avg_inference
+            stats['avg_postprocess'] = avg_postprocess
+            stats['fps'] = fps
+            stats.update(inference_params)
+            stats.update(meta_info)
+        
+        # CSV 파일에 통계 저장
+        if stats is not None:
+            csv_path = args.csv_path
+            os.makedirs(os.path.dirname(csv_path), exist_ok=True)
+            
+            # 파일이 존재하는지 확인
+            file_exists = os.path.isfile(csv_path)
+            
+            # CSV 파일에 쓰기
+            with open(csv_path, 'a', newline='') as csvfile:
+                # 헤더 생성 (config의 모든 키 + 통계 정보)
+                fieldnames = list(stats.keys())
+                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                
+                # 파일이 없으면 헤더 작성
+                if not file_exists:
+                    writer.writeheader()
+                
+                # 데이터 행 작성
+                writer.writerow(stats)
+            
+            print(f"[INFO] Statistics saved to {csv_path}")
