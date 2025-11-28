@@ -32,7 +32,7 @@ model
 *.engine
 
 runs/
-logs/
+log/
 output/
 checkpoints/
 
